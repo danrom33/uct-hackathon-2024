@@ -90,14 +90,30 @@ export default function Campaign({ params }: { params: { id: string } }) {
     { enabled: false },
   );
 
+  let donationInt = parseInt(donation);
+  let donationIntFirst = 0.6*donationInt;
+  let donationIntSecond = 0.4*donationInt;
+
+
+
   const incomingPayment = api.openPayments.createIncomingPayment.useQuery(
     {
       walletAddress: senderWalletAddress,
       receiverAddress: campaign.data?.walletAddress ?? "",
-      value: donation,
+      value: "" + donationIntFirst,
     },
     { enabled: false },
   );
+
+  const incomingPaymentSecond = api.openPayments.createIncomingPayment.useQuery(
+    {
+      walletAddress: senderWalletAddress,
+      receiverAddress: "https://ilp.rafiki.money/us2",
+      value: "" + donationIntSecond,
+    },
+    { enabled: false },
+  );
+
 
   const qoute = api.openPayments.createQoute.useQuery(
     {
@@ -107,17 +123,47 @@ export default function Campaign({ params }: { params: { id: string } }) {
     { enabled: false },
   );
 
+  const qouteTwo = api.openPayments.createQoute.useQuery(
+    {
+      walletAddress: senderWalletAddress,
+      incomingPaymentUrl: incomingPaymentSecond.data?.data.id ?? "",
+    },
+    { enabled: false },
+  );
+
+  // const qouteTotal = api.openPayments.createQoute.useQuery(
+  //   {
+  //     walletAddress: senderWalletAddress,
+  //     incomingPaymentUrl: incomingPaymentTotal.data?.data.id ?? "",
+  //   },
+  //   { enabled: false },
+  // );
+
+
+  // let totalAmount = parseInt(qoute.data?.data.debitAmount.value ?? "0") + parseInt(qouteTwo.data?.data.debitAmount.value ?? "0");
+  // let debitAmountTotal = {
+  //   value: "" + totalAmount,
+  //   assetCode: qoute.data?.data.debitAmount.assetCode ?? "0",
+  //   assetScale: qoute.data?.data.debitAmount.assetScale ?? 0,
+  // }
+
+  // console.log(debitAmountTotal);
+
+
+
+
+
   const outgoingPaymentAuthorization =
     api.openPayments.getOutgoingPaymentAuthorization.useQuery(
       {
         walletAddress: senderWalletAddress,
         qouteId: qoute.data?.data.id ?? "",
-        redirectUrl: window.location.href,
-        debitAmount: qoute.data?.data.debitAmount,
-        receiveAmount: qoute.data?.data.receiveAmount,
+        redirectUrl: window.location.href
       },
       { enabled: false },
     );
+
+    console.log("TOTAL INCOMING AMOUNT: ", "" + parseInt(qoute.data?.data?.debitAmount?.value ?? '0') + (parseInt(qouteTwo.data?.data?.debitAmount?.value ?? "0")/18.4))
 
   const createOutgoingPayment = api.openPayments.createOutgoingPayment.useQuery(
     {
@@ -129,6 +175,9 @@ export default function Campaign({ params }: { params: { id: string } }) {
     },
     { enabled: false },
   );
+
+
+
 
   // Use effect hooks - The hook allows sideeffects or actions to happen based on certain events taking place
   useEffect(() => {
@@ -435,7 +484,7 @@ export default function Campaign({ params }: { params: { id: string } }) {
                       variant="solid"
                       color={
                         createOutgoingPayment.data
-                          ? createOutgoingPayment.data.data.failed
+                          ? !createOutgoingPayment.data.success
                             ? "danger"
                             : "success"
                           : "danger"
@@ -447,7 +496,7 @@ export default function Campaign({ params }: { params: { id: string } }) {
                     >
                       <FaCheck size={15} />
                       {createOutgoingPayment.data
-                        ? createOutgoingPayment.data.data.failed
+                        ? !createOutgoingPayment.data.success
                           ? "Outgoing Payment Failed"
                           : "Outgoing Payment Created! "
                         : "Outgoing Payment Failed"}

@@ -10,6 +10,32 @@ import {
   getWalletAddressInfo,
 } from "../../helpers/open-payments";
 import { opAuthSchema, opCreateSchema } from "../schemas/openPayments";
+import { Grant, GrantContinuation, isFinalizedGrant } from "@interledger/open-payments";
+
+
+let pendingPayments:
+{
+  walletAddress: string,
+  continue_access_token: string,
+  continue_uri: string,
+  interact_ref: string
+  paymentDetails: {
+    incomingPaymentId: string,
+    quoteId: string
+    debitAmount:
+    {
+      value: string;
+      assetCode: string;
+      assetScale: number;
+    }
+  }[]
+}[] = [];
+
+let mostRecentUser : string = "";
+
+
+
+
 
 export const openPaymentsRouter = createTRPCRouter({
   getWalletDetails: publicProcedure
@@ -50,7 +76,6 @@ export const openPaymentsRouter = createTRPCRouter({
         message: "incoming payment created",
         data: {},
       };
-
       // Initialize Open Payments client
       const client = await getAuthenticatedClient();
 
@@ -68,6 +93,41 @@ export const openPaymentsRouter = createTRPCRouter({
         input.value,
         walletAddressDetails,
       );
+
+      
+
+      let userExists = false;
+      let userID = -1;
+
+      for(let i = 0; i < pendingPayments.length; ++i){
+        if(pendingPayments[i]?.walletAddress === input.walletAddress){
+          userExists = true;
+          userID = i;
+        }
+      }
+
+      if(userExists){
+        pendingPayments[userID]?.paymentDetails.push({
+          incomingPaymentId: incomingPayment.id,
+          debitAmount: incomingPayment.incomingAmount ?? {value: "0", assetCode: "USD", assetScale: 2},
+          quoteId: ""
+        })
+      } 
+      else{
+        pendingPayments.push({
+          walletAddress: input.walletAddress,
+          continue_access_token: "",
+          continue_uri: "",
+          interact_ref: "",
+          paymentDetails: []
+        });
+        pendingPayments[pendingPayments.length-1]?.paymentDetails.push({
+          incomingPaymentId: incomingPayment.id,
+          debitAmount: incomingPayment.incomingAmount ?? {value: "0", assetCode: "USD", assetScale: 2},
+          quoteId: ""
+        })
+      }
+
 
       return { ...response, ...{ data: incomingPayment } };
     }),
@@ -104,9 +164,21 @@ export const openPaymentsRouter = createTRPCRouter({
         walletAddressDetails,
       );
 
+      for(let i = 0; i < pendingPayments.length; ++i){
+        if(pendingPayments[i]?.walletAddress === input.walletAddress){
+          console.log("CORRESPONDING WALLET ADDRESS FOUND (FOR QUOTE)");
+          console.log(pendingPayments[i]?.walletAddress);
+          for(let j = 0; j < pendingPayments[i]?.paymentDetails.length; ++j){
+            if(pendingPayments[i]?.paymentDetails[j]?.incomingPaymentId === input.incomingPaymentUrl){
+              console.log("CORRESPONDING INCOMING PAYMENT FOUND (FOR QUOTE)");
+              pendingPayments[i].paymentDetails[j].quoteId = qoute.id;
+            }
+          }
+        }
+      }
       return { ...response, ...{ data: qoute } };
     }),
-
+ 
   getOutgoingPaymentAuthorization: publicProcedure
     .input(opAuthSchema)
     .query(async ({ input }) => {
@@ -133,6 +205,17 @@ export const openPaymentsRouter = createTRPCRouter({
           walletAddressDetails,
         );
 
+        for(let i = 0; i < pendingPayments.length; ++i){
+          if(pendingPayments[i]?.walletAddress === input.walletAddress){
+            pendingPayments[i].continue_access_token = outgoingPaymentAuthorization.continue.access_token.value;
+            pendingPayments[i].continue_uri = outgoingPaymentAuthorization.continue.uri;
+          }
+        }
+        
+        mostRecentUser = input.walletAddress;
+        console.log("MOST RECENT USER IS " + mostRecentUser);
+
+
       return { ...response, ...{ data: outgoingPaymentAuthorization } };
     }),
 
@@ -146,16 +229,52 @@ export const openPaymentsRouter = createTRPCRouter({
       };
 
       console.log("** ou");
-      console.log(input);
       // Initialize Open Payments client
       const client = await getAuthenticatedClient();
 
-      // create outgoing authorization grant
-      const outgoingPaymentResponse = await createOutgoingPayment(
-        client,
-        input,
-      );
+      for(let i = 0; i < pendingPayments.length; ++i){
+        if(pendingPayments[i]?.walletAddress === mostRecentUser){
+            pendingPayments[i].interact_ref = input.interactRef;
+            console.log(pendingPayments[i]);
 
-      return { ...response, ...{ data: outgoingPaymentResponse } };
+            const grant = await client.grant.continue(
+              {
+                accessToken: pendingPayments[i]?.continue_access_token ?? "accessTokenUndefined",
+                url: pendingPayments[i]?.continue_uri ?? "URLUndefined",
+              },
+              {
+                interact_ref: pendingPayments[i]?.interact_ref,
+              },
+            );
+        
+        
+          if (!isFinalizedGrant(grant)) {
+            throw new Error(
+              "Expected finalized grant. Probably the interaction from the previous script was not accepted, or the grant was already used."
+            );
+          }
+
+          let token = grant.access_token;
+          for(let j = 0; j < pendingPayments[i]?.paymentDetails.length; ++j){
+            const outgoingPaymentResponse = await createOutgoingPayment(
+              client,
+              pendingPayments[i]?.paymentDetails[j].quoteId ?? "undefined",
+              token.value,
+              pendingPayments[i].walletAddress ?? ""
+            );
+            const new_token = await client.token.rotate({
+              url: grant.access_token.manage,
+              accessToken: grant.access_token.value
+            });
+            token = new_token.access_token;
+          }
+        }
+      }
+      // create outgoing authorization grant
+
+      
+        // console.log("LOOP INFO: " + incomingPaymentIds[i] + "\n" + debitAmounts[i].value + "\n" + OPWalletAddress + "\n")
+
+      return { ...response };
     }),
 });
